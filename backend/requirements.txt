@@ -7,3 +7,4 @@ scipy>=1.10.0
 statsmodels>=0.14.0
 meteostat==1.1.0
 pgeocode
+requests

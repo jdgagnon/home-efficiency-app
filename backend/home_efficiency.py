@@ -7,7 +7,7 @@ import numpy as np
 import scipy.stats as stats
 import statsmodels.formula.api as smf
 
-import meteostat
+import requests
 import pgeocode
 import gc
 
@@ -94,61 +94,49 @@ def parse_nest_jsonl_from_zip(zip_bytes: bytes) -> pd.DataFrame:
     return df
 
 def fetch_weather_by_zip(zipcode: str, start_date: str, end_date: str) -> pd.DataFrame:
-    start = datetime.strptime(start_date, "%Y-%m-%d")
-    end = datetime.strptime(end_date, "%Y-%m-%d")
     nomi = pgeocode.Nominatim('us')
     loc = nomi.query_postal_code(zipcode)
     
     if pd.isna(loc.latitude):
         raise ValueError(f"Invalid or unrecognized US Zip Code: {zipcode}")
         
-    # Search for the 10 nearest stations
-    stations = meteostat.Stations()
-    nearby = stations.nearby(loc.latitude, loc.longitude).fetch(10)
+    print(f"[Diagnostic] Switched to Open-Meteo. Fetching weather for: {loc.latitude}, {loc.longitude}")
     
-    weather_df = pd.DataFrame()
-    selected_station_name = "None"
+    # Open-Meteo Archive API
+    url = "https://archive-api.open-meteo.com/v1/archive"
+    params = {
+        "latitude": float(loc.latitude),
+        "longitude": float(loc.longitude),
+        "start_date": start_date,
+        "end_date": end_date,
+        "daily": ["temperature_2m_mean", "wind_speed_10m_max"],
+        "timezone": "America/New_York"
+    }
     
-    # Try each station until we find data
-    for _, station in nearby.iterrows():
-        try:
-            print(f"[Diagnostic] Trying Weather Station: {station['name']} (ID: {station.name})")
-            # Try Daily fetch
-            data = meteostat.Daily(station.name, start, end)
-            candidate_df = data.fetch()
-            
-            if not candidate_df.empty:
-                weather_df = candidate_df
-                selected_station_name = station['name']
-                break
-            
-            # If Daily fails (common for recent days), try Hourly and aggregate
-            data_h = meteostat.Hourly(station.name, start, end)
-            candidate_df_h = data_h.fetch()
-            
-            if not candidate_df_h.empty:
-                # Aggregate hourly to daily
-                weather_df = candidate_df_h.resample('D').agg({
-                    'temp': 'mean',
-                    'wspd': 'mean'
-                }).rename(columns={'temp': 'tavg'})
-                selected_station_name = f"{station['name']} (Hourly Aggregated)"
-                break
-                
-        except Exception as e:
-            print(f"[Diagnostic] Station {station['name']} failed: {str(e)}")
-            continue
-            
-    if weather_df.empty:
-        raise ValueError(f"Meteostat could not find any weather stations with data near Zip {zipcode} for these dates.")
+    try:
+        response = requests.get(url, params=params, timeout=15)
+        response.raise_for_status()
+        data = response.json()
         
-    print(f"[Diagnostic] Successfully selected Weather Station: {selected_station_name}")
-    weather_df = weather_df.reset_index()
+        if "daily" not in data:
+            raise ValueError("Open-Meteo API returned no daily data.")
+            
+        daily = data["daily"]
+        weather_df = pd.DataFrame({
+            "date": pd.to_datetime(daily["time"]).date,
+            "avg_out_temp_weather": ((pd.Series(daily["temperature_2m_mean"]) * 9/5) + 32).astype(np.float32),
+            "avg_wind_mph": (pd.Series(daily["wind_speed_10m_max"]) * 0.621371).astype(np.float32)
+        })
         
-    weather_df['date'] = weather_df['time'].dt.date
-    weather_df['avg_out_temp_weather'] = (weather_df['tavg'] * 9/5) + 32
-    weather_df['avg_wind_mph'] = weather_df['wspd'] * 0.621371
-    return weather_df[['date', 'avg_out_temp_weather', 'avg_wind_mph']]
+        # Fill any gaps (Open-Meteo is very reliable but we add safety)
+        weather_df.interpolate(inplace=True)
+        
+        print(f"[Diagnostic] Open-Meteo fetch successful. Rows: {len(weather_df)}")
+        return weather_df
+        
+    except Exception as e:
+        print(f"[Diagnostic] Open-Meteo Error: {str(e)}")
+        raise ValueError(f"Failed to fetch weather from Open-Meteo: {str(e)}")
 
 # =============================================================================
 # MODULE B: DATA PROCESSING & MASTER AGGREGATION
