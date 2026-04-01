@@ -7,11 +7,15 @@ import numpy as np
 import scipy.stats as stats
 import statsmodels.formula.api as smf
 
+import time
 import requests
 import pgeocode
 import gc
+from threading import Lock
 
 # --- SYSTEM CONFIGS ---
+WEATHER_CACHE = {}
+CACHE_LOCK = Lock()
 WAKE_START_HOUR = 7
 WAKE_END_HOUR = 20
 SETPOINT_GRID = np.arange(64, 76.5, 0.5)
@@ -94,6 +98,13 @@ def parse_nest_jsonl_from_zip(zip_bytes: bytes) -> pd.DataFrame:
     return df
 
 def fetch_weather_by_zip(zipcode: str, start_date: str, end_date: str) -> pd.DataFrame:
+    cache_key = f"{zipcode}_{start_date}_{end_date}"
+    
+    with CACHE_LOCK:
+        if cache_key in WEATHER_CACHE:
+            print(f"[Diagnostic] Cache HIT for Zip {zipcode}")
+            return WEATHER_CACHE[cache_key]
+
     nomi = pgeocode.Nominatim('us')
     loc = nomi.query_postal_code(zipcode)
     
@@ -102,7 +113,6 @@ def fetch_weather_by_zip(zipcode: str, start_date: str, end_date: str) -> pd.Dat
         
     print(f"[Diagnostic] Switched to Open-Meteo. Fetching weather for: {loc.latitude}, {loc.longitude}")
     
-    # Open-Meteo Archive API
     url = "https://archive-api.open-meteo.com/v1/archive"
     params = {
         "latitude": float(loc.latitude),
@@ -113,30 +123,47 @@ def fetch_weather_by_zip(zipcode: str, start_date: str, end_date: str) -> pd.Dat
         "timezone": "America/New_York"
     }
     
-    try:
-        response = requests.get(url, params=params, timeout=15)
-        response.raise_for_status()
-        data = response.json()
-        
-        if "daily" not in data:
-            raise ValueError("Open-Meteo API returned no daily data.")
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, params=params, timeout=15)
             
-        daily = data["daily"]
-        weather_df = pd.DataFrame({
-            "date": pd.to_datetime(daily["time"]).date,
-            "avg_out_temp_weather": ((pd.Series(daily["temperature_2m_mean"]) * 9/5) + 32).astype(np.float32),
-            "avg_wind_mph": (pd.Series(daily["wind_speed_10m_max"]) * 0.621371).astype(np.float32)
-        })
-        
-        # Fill any gaps (Open-Meteo is very reliable but we add safety)
-        weather_df[['avg_out_temp_weather', 'avg_wind_mph']] = weather_df[['avg_out_temp_weather', 'avg_wind_mph']].interpolate()
-        
-        print(f"[Diagnostic] Open-Meteo fetch successful. Rows: {len(weather_df)}")
-        return weather_df
-        
-    except Exception as e:
-        print(f"[Diagnostic] Open-Meteo Error: {str(e)}")
-        raise ValueError(f"Failed to fetch weather from Open-Meteo: {str(e)}")
+            if response.status_code == 429:
+                wait_time = int(response.headers.get("Retry-After", 5 * (attempt + 1)))
+                print(f"[Diagnostic] Rate limited (429). Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+                
+            response.raise_for_status()
+            data = response.json()
+            
+            if "daily" not in data:
+                raise ValueError("Open-Meteo API returned no daily data.")
+                
+            daily = data["daily"]
+            weather_df = pd.DataFrame({
+                "date": pd.to_datetime(daily["time"]).date,
+                "avg_out_temp_weather": ((pd.Series(daily["temperature_2m_mean"]) * 9/5) + 32).astype(np.float32),
+                "avg_wind_mph": (pd.Series(daily["wind_speed_10m_max"]) * 0.621371).astype(np.float32)
+            })
+            
+            weather_df.dropna(subset=['avg_out_temp_weather'], inplace=True)
+            
+            print(f"[Diagnostic] Open-Meteo fetch successful. Rows: {len(weather_df)}")
+            
+            with CACHE_LOCK:
+                WEATHER_CACHE[cache_key] = weather_df
+                # Keep cache small
+                if len(WEATHER_CACHE) > 50:
+                    WEATHER_CACHE.pop(next(iter(WEATHER_CACHE)))
+                    
+            return weather_df
+            
+        except Exception as e:
+            if attempt == max_retries - 1:
+                print(f"[Diagnostic] Open-Meteo Error: {str(e)}")
+                raise ValueError(f"Failed to fetch weather from Open-Meteo after {max_retries} attempts: {str(e)}")
+            time.sleep(2)
 
 # =============================================================================
 # MODULE B: DATA PROCESSING & MASTER AGGREGATION
