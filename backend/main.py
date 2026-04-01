@@ -4,6 +4,18 @@ import pandas as pd
 import uvicorn
 import gc
 import time
+import numpy as np
+
+def sanitize_for_json(obj):
+    if isinstance(obj, dict):
+        return {k: sanitize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_for_json(i) for i in obj]
+    elif isinstance(obj, (np.float32, np.float64)):
+        return float(obj)
+    elif isinstance(obj, (np.int32, np.int64, np.int8)):
+        return int(obj)
+    return obj
 from home_efficiency import (
     parse_nest_jsonl_from_zip,
     fetch_weather_by_zip,
@@ -64,10 +76,10 @@ async def analyze_home(
         
         print(f"[Timer] TOTAL PROCESSING TIME: {time.time() - t0:.2f}s")
         
-        pct_change = stats_results.get("efficiency_degradation_pct", 0) / 100.0
-        projected_bill = benchmark * (1 + pct_change)
+        pct_change = float(stats_results.get("efficiency_degradation_pct", 0)) / 100.0
+        projected_bill = float(benchmark) * (1 + pct_change)
         
-        return {
+        response_data = {
             "metadata": {
                 "zip_code": zipcode,
                 "intervention_date": intervention_date,
@@ -81,6 +93,9 @@ async def analyze_home(
                 "estimated_loss_usd": round(float(projected_bill - benchmark), 2)
             }
         }
+
+        # Recursively convert numpy types to standard Python types for JSON serialization
+        return sanitize_for_json(response_data)
     except Exception as e:
         print(f"[Diagnostic] ERROR: {str(e)}")
         return {"error": str(e)}
