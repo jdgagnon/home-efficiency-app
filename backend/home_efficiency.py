@@ -102,19 +102,48 @@ def fetch_weather_by_zip(zipcode: str, start_date: str, end_date: str) -> pd.Dat
     if pd.isna(loc.latitude):
         raise ValueError(f"Invalid or unrecognized US Zip Code: {zipcode}")
         
-    point = meteostat.Point(loc.latitude, loc.longitude)
-    try:
-        data = meteostat.Daily(point, start, end)
-        weather_df = data.fetch()
-        
-        if weather_df.empty:
-            raise ValueError(f"No weather data returned from meteostat for {zipcode}")
+    # Search for the 10 nearest stations
+    stations = meteostat.Stations()
+    nearby = stations.nearby(loc.latitude, loc.longitude).fetch(10)
+    
+    weather_df = pd.DataFrame()
+    selected_station_name = "None"
+    
+    # Try each station until we find data
+    for _, station in nearby.iterrows():
+        try:
+            print(f"[Diagnostic] Trying Weather Station: {station['name']} (ID: {station.name})")
+            # Try Daily fetch
+            data = meteostat.Daily(station.name, start, end)
+            candidate_df = data.fetch()
             
-        weather_df = weather_df.reset_index()
-    except KeyError as e:
-        if str(e) == "'hourly_start'":
-            raise ValueError(f"Meteostat could not find a weather station near {zipcode} with data for these dates.")
-        raise e
+            if not candidate_df.empty:
+                weather_df = candidate_df
+                selected_station_name = station['name']
+                break
+            
+            # If Daily fails (common for recent days), try Hourly and aggregate
+            data_h = meteostat.Hourly(station.name, start, end)
+            candidate_df_h = data_h.fetch()
+            
+            if not candidate_df_h.empty:
+                # Aggregate hourly to daily
+                weather_df = candidate_df_h.resample('D').agg({
+                    'temp': 'mean',
+                    'wspd': 'mean'
+                }).rename(columns={'temp': 'tavg'})
+                selected_station_name = f"{station['name']} (Hourly Aggregated)"
+                break
+                
+        except Exception as e:
+            print(f"[Diagnostic] Station {station['name']} failed: {str(e)}")
+            continue
+            
+    if weather_df.empty:
+        raise ValueError(f"Meteostat could not find any weather stations with data near Zip {zipcode} for these dates.")
+        
+    print(f"[Diagnostic] Successfully selected Weather Station: {selected_station_name}")
+    weather_df = weather_df.reset_index()
         
     weather_df['date'] = weather_df['time'].dt.date
     weather_df['avg_out_temp_weather'] = (weather_df['tavg'] * 9/5) + 32
