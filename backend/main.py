@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
+import pandas as pd
 import uvicorn
 import gc
 import time
