@@ -34,7 +34,10 @@ async def analyze_home(
         min_date = raw_df['date'].min().strftime("%Y-%m-%d")
         max_date = raw_df['date'].max().strftime("%Y-%m-%d")
         
-        weather_df = fetch_weather_by_zip(zipcode, min_date, max_date)
+        # Temporarily disabling external weather fetch to bypass rate limit
+        # weather_df = fetch_weather_by_zip(zipcode, min_date, max_date)
+        weather_df = pd.DataFrame()
+        
         master_df = build_daily_master(raw_df, weather_df, intervention_date)
         
         stats_results = evaluate_envelope(master_df)

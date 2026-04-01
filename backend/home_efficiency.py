@@ -184,7 +184,11 @@ def build_daily_master(nest_df: pd.DataFrame, weather_df: pd.DataFrame, interven
         if daily_nest[col].dtype == np.float64:
             daily_nest[col] = daily_nest[col].astype(np.float32)
 
-    df_master = pd.merge(daily_nest, weather_df, on='date', how='left')
+    if not weather_df.empty:
+        df_master = pd.merge(daily_nest, weather_df, on='date', how='left')
+    else:
+        df_master = daily_nest.copy()
+        
     df_master = df_master[df_master['total_heat_hrs'] <= 24].copy()
     
     inter_date_obj = datetime.strptime(intervention_date, "%Y-%m-%d").date()
