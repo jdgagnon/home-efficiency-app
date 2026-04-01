@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+import gc
 from home_efficiency import (
     parse_nest_jsonl_from_zip,
     fetch_weather_by_zip,
@@ -57,6 +58,8 @@ async def analyze_home(
         }
     except Exception as e:
         return {"error": str(e)}
+    finally:
+        gc.collect()
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

@@ -13,6 +13,8 @@ try:
 except ImportError:
     pass
 
+import gc
+
 # --- SYSTEM CONFIGS ---
 WAKE_START_HOUR = 7
 WAKE_END_HOUR = 20
@@ -25,7 +27,13 @@ SETPOINT_GRID = np.arange(64, 76.5, 0.5)
 def parse_nest_jsonl_from_zip(zip_bytes: bytes) -> pd.DataFrame:
     """
     Parses 'HvacRuntime.jsonl' files directly from a zip file in memory.
+    Optimized for memory by only keeping required columns and using float32.
     """
+    REQUIRED_COLS = {
+        'interval_start', 'heating_time', 'cooling_time', 
+        'indoor_temp', 'outdoor_temp', 'heating_target', 'cooling_target'
+    }
+    
     all_data = []
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
         jsonl_files = [m for m in z.namelist() if m.endswith('HvacRuntime.jsonl')]
@@ -45,32 +53,42 @@ def parse_nest_jsonl_from_zip(zip_bytes: bytes) -> pd.DataFrame:
                         payload = raw_json.get("value", raw_json) if isinstance(raw_json, dict) else json.loads(raw_json)
                         if isinstance(payload, str): 
                             payload = json.loads(payload)
-                        all_data.append(payload)
+                        
+                        # Only keep essential columns to save RAM
+                        filtered_payload = {k: payload[k] for k in REQUIRED_COLS if k in payload}
+                        all_data.append(filtered_payload)
                     except Exception:
                         continue
 
     df = pd.DataFrame(all_data)
+    del all_data
+    gc.collect()
     
     if 'interval_start' in df.columns:
         df['ts'] = pd.to_datetime(df['interval_start'], utc=True).dt.tz_convert('America/New_York')
         df['date'] = df['ts'].dt.date
-        df['hour'] = df['ts'].dt.hour
+        df['hour'] = df['ts'].dt.hour.astype(np.int8)
+        df.drop(columns=['interval_start', 'ts'], inplace=True)
         
     num_cols = ['heating_time', 'cooling_time', 'indoor_temp', 'outdoor_temp', 
-                'heating_target', 'cooling_target', 'indoor_humidity']
+                'heating_target', 'cooling_target']
     for c in num_cols:
         if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors='coerce')
+            df[c] = pd.to_numeric(df[c], errors='coerce').astype(np.float32)
             
     if 'heating_time' in df.columns:
-        df['heating_hrs'] = df['heating_time'] / 3600.0
+        df['heating_hrs'] = (df['heating_time'] / 3600.0).astype(np.float32)
     if 'cooling_time' in df.columns:
-        df['cooling_hrs'] = df['cooling_time'] / 3600.0
+        df['cooling_hrs'] = (df['cooling_time'] / 3600.0).astype(np.float32)
         
     temp_cols = ['indoor_temp', 'outdoor_temp', 'heating_target', 'cooling_target']
     for t in temp_cols:
         if t in df.columns:
-            df[f'{t}_f'] = (df[t] * 9/5) + 32
+            df[f'{t}_f'] = ((df[t] * 9/5) + 32).astype(np.float32)
+    
+    # Drop raw runtime seconds to free space
+    df.drop(columns=['heating_time', 'cooling_time', 'indoor_temp', 'outdoor_temp', 
+                    'heating_target', 'cooling_target'], inplace=True)
             
     return df
 
@@ -100,7 +118,7 @@ def fetch_weather_by_zip(zipcode: str, start_date: str, end_date: str) -> pd.Dat
 # =============================================================================
 
 def build_daily_master(nest_df: pd.DataFrame, weather_df: pd.DataFrame, intervention_date: str) -> pd.DataFrame:
-    nest_df['temp_delta'] = nest_df['indoor_temp_f'] - nest_df['outdoor_temp_f']
+    nest_df['temp_delta'] = (nest_df['indoor_temp_f'] - nest_df['outdoor_temp_f']).astype(np.float32)
     daily_nest = nest_df.groupby('date').agg(
         avg_heating_target_f=('heating_target_f', 'mean'),
         total_heat_hrs=('heating_hrs', 'sum'),
@@ -109,12 +127,19 @@ def build_daily_master(nest_df: pd.DataFrame, weather_df: pd.DataFrame, interven
         in_temp_f=('indoor_temp_f', 'mean')
     ).reset_index()
     
+    # Cast aggregated results to float32
+    for col in daily_nest.columns:
+        if daily_nest[col].dtype == np.float64:
+            daily_nest[col] = daily_nest[col].astype(np.float32)
+
     df_master = pd.merge(daily_nest, weather_df, on='date', how='left')
-    df_master = df_master[df_master['total_heat_hrs'] <= 24]
+    df_master = df_master[df_master['total_heat_hrs'] <= 24].copy()
     
     inter_date_obj = datetime.strptime(intervention_date, "%Y-%m-%d").date()
     df_master['period'] = np.where(df_master['date'] >= inter_date_obj, "After Intervention", "Before Intervention")
-    df_master['leak_ratio'] = np.where(df_master['avg_delta'] > 0, df_master['total_heat_hrs'] / df_master['avg_delta'], np.nan)
+    df_master['leak_ratio'] = np.where(df_master['avg_delta'] > 0, df_master['total_heat_hrs'] / df_master['avg_delta'], np.nan).astype(np.float32)
+    
+    gc.collect()
     return df_master
 
 # =============================================================================
@@ -148,10 +173,9 @@ def evaluate_envelope(df_master: pd.DataFrame) -> dict:
 
 def optimize_thermostat_schedule(interval_df: pd.DataFrame, daily_df: pd.DataFrame, intervention_date: str) -> dict:
     inter_date_obj = datetime.strptime(intervention_date, "%Y-%m-%d").date()
-    df = interval_df.copy()
     
     heat_days = daily_df[(daily_df['avg_delta'] > 5) & (daily_df['total_heat_hrs'] > 0)]['date']
-    df = df[df['date'].isin(heat_days)].copy()
+    df = interval_df[interval_df['date'].isin(heat_days)].copy()
     
     if df.empty:
         return {"error": "Not enough data"}
@@ -174,13 +198,20 @@ def optimize_thermostat_schedule(interval_df: pd.DataFrame, daily_df: pd.DataFra
         
     heating_rate_model = smf.ols('heat_frac ~ delta_t', data=before_hourly).fit()
 
+    # Pre-calculate comfort for a range of setpoints to avoid inner-loop overhead
     wake_intervals = df[df['time_zone'] == "Wake"].copy()
+    wake_in_temp = wake_intervals['indoor_temp_f'].values
+    wake_dates = wake_intervals['date'].values
+    unique_dates = np.unique(wake_dates)
+    date_map = {d: i for i, d in enumerate(unique_dates)}
+    date_indices = np.array([date_map[d] for d in wake_dates])
     
     def compute_comfort(setpoint):
-        wake = wake_intervals.copy()
-        wake['discomfort_dh'] = np.maximum(0, wake['indoor_temp_f'] - setpoint) * (5/60.0) 
-        daily_disc = wake.groupby('date')['discomfort_dh'].sum()
-        return daily_disc.mean() if not daily_disc.empty else 0
+        discomfort = np.maximum(0, wake_in_temp - setpoint) * (5/60.0)
+        # Sum by date using numpy for speed and memory
+        daily_sums = np.zeros(len(unique_dates), dtype=np.float32)
+        np.add.at(daily_sums, date_indices, discomfort)
+        return daily_sums.mean()
 
     wake_hours_per_day = WAKE_END_HOUR - WAKE_START_HOUR
     typical_out_temp = hourly_df['out_bin'].median()
@@ -190,13 +221,16 @@ def optimize_thermostat_schedule(interval_df: pd.DataFrame, daily_df: pd.DataFra
         pred_data = pd.DataFrame({'delta_t': [sp - typical_out_temp]})
         hf = max(0, min(1, heating_rate_model.predict(pred_data).iloc[0]))
         pareto_results.append({
-            'setpoint': sp,
-            'daily_heat_hrs': hf * wake_hours_per_day,
-            'discomfort_dh': compute_comfort(sp),
-            'heat_frac_steady': hf
+            'setpoint': float(sp),
+            'daily_heat_hrs': float(hf * wake_hours_per_day),
+            'discomfort_dh': float(compute_comfort(sp))
         })
         
     pareto_df = pd.DataFrame(pareto_results)
+    
+    # Cleanup heavy objects before finalizing
+    del df, hourly_df, before_hourly, wake_intervals, wake_in_temp
+    gc.collect()
     
     min_cost = pareto_df['daily_heat_hrs'].min()
     max_cost = pareto_df['daily_heat_hrs'].max()
@@ -210,7 +244,6 @@ def optimize_thermostat_schedule(interval_df: pd.DataFrame, daily_df: pd.DataFra
     optimal_row = pareto_df.loc[pareto_df['dist'].idxmin()]
     optimal_wake_setpoint = optimal_row['setpoint']
     
-    # We serialize the pareto curve for frontend recharts/plotly
     return {
         "optimal_wake_setpoint": float(optimal_wake_setpoint),
         "pareto_curve": pareto_df[['setpoint', 'daily_heat_hrs', 'discomfort_dh']].to_dict(orient='records')
