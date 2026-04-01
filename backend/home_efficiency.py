@@ -129,7 +129,7 @@ def fetch_weather_by_zip(zipcode: str, start_date: str, end_date: str) -> pd.Dat
         })
         
         # Fill any gaps (Open-Meteo is very reliable but we add safety)
-        weather_df.interpolate(inplace=True)
+        weather_df[['avg_out_temp_weather', 'avg_wind_mph']] = weather_df[['avg_out_temp_weather', 'avg_wind_mph']].interpolate()
         
         print(f"[Diagnostic] Open-Meteo fetch successful. Rows: {len(weather_df)}")
         return weather_df
