@@ -7,12 +7,8 @@ import numpy as np
 import scipy.stats as stats
 import statsmodels.formula.api as smf
 
-try:
-    from meteostat import Point, Daily
-    import pgeocode
-except ImportError:
-    pass
-
+from meteostat import Point, Daily
+import pgeocode
 import gc
 
 # --- SYSTEM CONFIGS ---
