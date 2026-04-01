@@ -40,13 +40,13 @@ export default function App() {
       });
       
       const data = await res.json();
+      console.log("[Diagnostic] Full Data Received:", data);
       if (data.error) throw new Error(data.error);
       setResults(data);
     } catch (err) {
       console.log("[Diagnostic] Full Error Object:", err);
       setError(err.message || 'Failed to analyze data');
     } finally {
-      console.log("[Diagnostic] Full Data Response:", results);
       setLoading(false);
     }
   };
@@ -163,7 +163,9 @@ function Dashboard({ results, reset }) {
               <YAxis yAxisId="left" stroke="var(--accent-red)" label={{ value: 'Daily Heat Hrs', angle: -90, position: 'insideLeft', fill: 'var(--accent-red)' }} />
               <YAxis yAxisId="right" orientation="right" stroke="var(--accent-blue)" label={{ value: 'Discomfort DH', angle: 90, position: 'insideRight', fill: 'var(--accent-blue)' }} />
               <Tooltip content={<CustomTooltip />} />
-              <ReferenceLine x={schedule_recommendations.optimal_wake_setpoint} stroke="var(--success-green)" strokeDasharray="3 3" label={{position: 'top', value: 'Optimal', fill: 'var(--success-green)'}} />
+              {typeof schedule_recommendations?.optimal_wake_setpoint === 'number' && (
+                <ReferenceLine x={schedule_recommendations.optimal_wake_setpoint} stroke="var(--success-green)" strokeDasharray="3 3" label={{position: 'top', value: 'Optimal', fill: 'var(--success-green)'}} />
+              )}
               <Line yAxisId="left" type="monotone" dataKey="daily_heat_hrs" stroke="var(--accent-red)" strokeWidth={3} dot={false} />
               <Line yAxisId="right" type="monotone" dataKey="discomfort_dh" stroke="var(--accent-blue)" strokeWidth={3} dot={false} />
             </LineChart>
