@@ -15,6 +15,8 @@ def sanitize_for_json(obj):
         return float(obj)
     elif isinstance(obj, (np.int32, np.int64, np.int8)):
         return int(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
     return obj
 from home_efficiency import (
     parse_nest_jsonl_from_zip,
