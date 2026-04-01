@@ -60,11 +60,16 @@ def parse_nest_jsonl_from_zip(zip_bytes: bytes) -> pd.DataFrame:
     del all_data
     gc.collect()
     
-    if 'interval_start' in df.columns:
-        df['ts'] = pd.to_datetime(df['interval_start'], utc=True).dt.tz_convert('America/New_York')
+    # Find the timestamp column
+    ts_col = next((c for c in ['interval_start', 'hourly_start', 'start_time'] if c in df.columns), None)
+    
+    if ts_col:
+        df['ts'] = pd.to_datetime(df[ts_col], unit='s', utc=True, errors='coerce').dt.tz_convert('America/New_York')
         df['date'] = df['ts'].dt.date
         df['hour'] = df['ts'].dt.hour.astype(np.int8)
-        df.drop(columns=['interval_start', 'ts'], inplace=True)
+        # Drop raw timestamp columns
+        cols_to_drop = [c for c in ['interval_start', 'hourly_start', 'start_time', 'ts'] if c in df.columns]
+        df.drop(columns=cols_to_drop, inplace=True, errors='ignore')
         
     num_cols = ['heating_time', 'cooling_time', 'indoor_temp', 'outdoor_temp', 
                 'heating_target', 'cooling_target']
@@ -98,11 +103,18 @@ def fetch_weather_by_zip(zipcode: str, start_date: str, end_date: str) -> pd.Dat
         raise ValueError(f"Invalid or unrecognized US Zip Code: {zipcode}")
         
     point = meteostat.Point(loc.latitude, loc.longitude)
-    data = meteostat.Daily(point, start, end)
-    weather_df = data.fetch().reset_index()
-    
-    if weather_df.empty:
-        raise ValueError(f"No weather data returned from meteostat for {zipcode}")
+    try:
+        data = meteostat.Daily(point, start, end)
+        weather_df = data.fetch()
+        
+        if weather_df.empty:
+            raise ValueError(f"No weather data returned from meteostat for {zipcode}")
+            
+        weather_df = weather_df.reset_index()
+    except KeyError as e:
+        if str(e) == "'hourly_start'":
+            raise ValueError(f"Meteostat could not find a weather station near {zipcode} with data for these dates.")
+        raise e
         
     weather_df['date'] = weather_df['time'].dt.date
     weather_df['avg_out_temp_weather'] = (weather_df['tavg'] * 9/5) + 32
