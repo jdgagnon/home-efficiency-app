@@ -27,6 +27,7 @@ async def analyze_home(
     file: UploadFile = Form(...)
 ):
     try:
+        print(f"[Diagnostic] Incoming request: Zip={zipcode}, File={file.filename}")
         contents = await file.read()
         raw_df = parse_nest_jsonl_from_zip(contents)
         
@@ -57,6 +58,7 @@ async def analyze_home(
             }
         }
     except Exception as e:
+        print(f"[Diagnostic] ERROR: {str(e)}")
         return {"error": str(e)}
     finally:
         gc.collect()

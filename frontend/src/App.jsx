@@ -32,6 +32,8 @@ export default function App() {
 
     try {
       const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+      console.log(`[Diagnostic] Calling API at: ${apiUrl}/api/analyze`);
+      
       const res = await fetch(`${apiUrl}/api/analyze`, {
         method: 'POST',
         body: formData,
@@ -41,6 +43,7 @@ export default function App() {
       if (data.error) throw new Error(data.error);
       setResults(data);
     } catch (err) {
+      console.error("[Diagnostic] Full Error Object:", err);
       setError(err.message || 'Failed to analyze data');
     } finally {
       setLoading(false);
