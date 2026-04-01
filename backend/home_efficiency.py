@@ -7,7 +7,7 @@ import numpy as np
 import scipy.stats as stats
 import statsmodels.formula.api as smf
 
-from meteostat import Point, Daily
+import meteostat
 import pgeocode
 import gc
 
@@ -97,8 +97,8 @@ def fetch_weather_by_zip(zipcode: str, start_date: str, end_date: str) -> pd.Dat
     if pd.isna(loc.latitude):
         raise ValueError(f"Invalid or unrecognized US Zip Code: {zipcode}")
         
-    point = Point(loc.latitude, loc.longitude)
-    data = Daily(point, start, end)
+    point = meteostat.Point(loc.latitude, loc.longitude)
+    data = meteostat.Daily(point, start, end)
     weather_df = data.fetch().reset_index()
     
     if weather_df.empty:
