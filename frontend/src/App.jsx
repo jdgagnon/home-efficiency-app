@@ -145,15 +145,15 @@ function Dashboard({ results, reset }) {
         <div className="glass-panel stat-card">
           <div className="stat-label">Optimal Wake Setpoint</div>
           <div className="stat-value gain">
-            {schedule_recommendations?.optimal_wake_setpoint || 'N/A'}°F
+            {schedule_recommendations?.optimal_wake_setpoint ?? 'N/A'}°F
           </div>
           <p style={{color: 'var(--text-secondary)', fontSize: '0.85rem'}}>
-            Best Drop Setback: {schedule_recommendations?.recommended_overnight_setback || 0}°F (saves {(schedule_recommendations?.expected_daily_savings_pct || 0).toFixed(1)}%)
+            Best Drop Setback: {schedule_recommendations?.recommended_overnight_setback ?? 0}°F (saves {(schedule_recommendations?.expected_daily_savings_pct ?? 0).toFixed(1)}%)
           </p>
         </div>
       </div>
 
-      {paretoData && (
+      {Array.isArray(paretoData) && paretoData.length > 0 && (
         <div className="glass-panel chart-container">
           <h3 style={{marginBottom: '20px'}}>Pareto Frontier: Heating Cost vs. Comfort</h3>
           <ResponsiveContainer width="100%" height="85%">
@@ -166,8 +166,8 @@ function Dashboard({ results, reset }) {
               {typeof schedule_recommendations?.optimal_wake_setpoint === 'number' && (
                 <ReferenceLine x={schedule_recommendations.optimal_wake_setpoint} stroke="var(--success-green)" strokeDasharray="3 3" label={{position: 'top', value: 'Optimal', fill: 'var(--success-green)'}} />
               )}
-              <Line yAxisId="left" type="monotone" dataKey="daily_heat_hrs" stroke="var(--accent-red)" strokeWidth={3} dot={false} />
-              <Line yAxisId="right" type="monotone" dataKey="discomfort_dh" stroke="var(--accent-blue)" strokeWidth={3} dot={false} />
+              <Line yAxisId="left" type="monotone" dataKey="daily_heat_hrs" stroke="var(--accent-red)" strokeWidth={3} dot={false} isAnimationActive={false} />
+              <Line yAxisId="right" type="monotone" dataKey="discomfort_dh" stroke="var(--accent-blue)" strokeWidth={3} dot={false} isAnimationActive={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>
