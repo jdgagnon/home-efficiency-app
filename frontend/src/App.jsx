@@ -43,9 +43,10 @@ export default function App() {
       if (data.error) throw new Error(data.error);
       setResults(data);
     } catch (err) {
-      console.error("[Diagnostic] Full Error Object:", err);
+      console.log("[Diagnostic] Full Error Object:", err);
       setError(err.message || 'Failed to analyze data');
     } finally {
+      console.log("[Diagnostic] Full Data Response:", results);
       setLoading(false);
     }
   };
@@ -125,29 +126,29 @@ function Dashboard({ results, reset }) {
       <div className="stats-grid">
         <div className="glass-panel stat-card">
           <div className="stat-label">Efficiency Change</div>
-          <div className={`stat-value ${statistics.efficiency_degradation_pct > 0 ? 'loss' : 'gain'}`}>
-            {statistics.efficiency_degradation_pct > 0 ? '+' : ''}{statistics.efficiency_degradation_pct}%
+          <div className={`stat-value ${(statistics?.efficiency_degradation_pct || 0) > 0 ? 'loss' : 'gain'}`}>
+            {(statistics?.efficiency_degradation_pct || 0) > 0 ? '+' : ''}{statistics?.efficiency_degradation_pct || 0}%
           </div>
           <p style={{color: 'var(--text-secondary)', fontSize: '0.85rem'}}>
-            Welch's p-value: <span style={{color: statistics.is_significant ? 'var(--accent-blue)' : 'inherit'}}>{statistics.p_value.toExponential(2)}</span>
+            Welch's p-value: <span style={{color: statistics?.is_significant ? 'var(--accent-blue)' : 'inherit'}}>{statistics?.p_value?.toExponential(2) || 'N/A'}</span>
           </p>
         </div>
         
         <div className="glass-panel stat-card">
           <div className="stat-label">Projected Financial Impact</div>
           <div className="stat-value loss">
-            +${financials.estimated_loss_usd}
+            +${financials?.estimated_loss_usd || 0}
           </div>
-          <p style={{color: 'var(--text-secondary)', fontSize: '0.85rem'}}>Estimated month bill: ${financials.projected_post_intervention_usd}</p>
+          <p style={{color: 'var(--text-secondary)', fontSize: '0.85rem'}}>Estimated month bill: ${financials?.projected_post_intervention_usd || 0}</p>
         </div>
 
         <div className="glass-panel stat-card">
           <div className="stat-label">Optimal Wake Setpoint</div>
           <div className="stat-value gain">
-            {schedule_recommendations.optimal_wake_setpoint}°F
+            {schedule_recommendations?.optimal_wake_setpoint || 'N/A'}°F
           </div>
           <p style={{color: 'var(--text-secondary)', fontSize: '0.85rem'}}>
-            Best Drop Setback: {schedule_recommendations.recommended_overnight_setback}°F (saves {(schedule_recommendations.expected_daily_savings_pct).toFixed(1)}%)
+            Best Drop Setback: {schedule_recommendations?.recommended_overnight_setback || 0}°F (saves {(schedule_recommendations?.expected_daily_savings_pct || 0).toFixed(1)}%)
           </p>
         </div>
       </div>
